@@ -1,0 +1,21 @@
+name: Docker Image CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - id: build-keycloak
+      name: Build Keycloak
+      shell: bash
+      run: ./mvnw install -Pdistribution -am -pl distribution/maven-plugins/licenses-processor; ./mvnw install dependency:resolve -V -e -DskipTests -DskipExamples -DexcludeGroupIds=org.keycloak -Dsilent=true -DcommitProtoLockChanges=true;"
+
+    - id: yuhhh 
+      name: Build the Docker image
+      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
