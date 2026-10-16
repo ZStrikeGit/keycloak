@@ -1,8 +1,14 @@
 package org.keycloak.testsuite.util;
 
-import org.apache.commons.lang3.StringUtils;
-import org.junit.Assert;
+import java.time.Duration;
+import java.util.Optional;
+import java.util.function.Supplier;
+
 import org.keycloak.testsuite.page.AbstractPatternFlyAlert;
+import org.keycloak.testsuite.pages.AbstractPage;
+
+import org.apache.commons.lang3.StringUtils;
+import org.junit.jupiter.api.Assertions;
 import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.Keys;
@@ -10,16 +16,12 @@ import org.openqa.selenium.NoSuchElementException;
 import org.openqa.selenium.TimeoutException;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
+import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.firefox.FirefoxDriver;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.Select;
 import org.openqa.selenium.support.ui.WebDriverWait;
 
-import java.time.Duration;
-import java.util.Optional;
-import java.util.function.Supplier;
-
-import org.openqa.selenium.chrome.ChromeDriver;
 import static org.keycloak.testsuite.util.DroneUtils.getCurrentDriver;
 import static org.keycloak.testsuite.util.WaitUtils.log;
 import static org.keycloak.testsuite.util.WaitUtils.waitForPageToLoad;
@@ -84,6 +86,16 @@ public final class UIUtils {
         clickElement(element, Keys.ENTER);
     }
 
+    /**
+     * Same than clickLink but it does not perform any wait after clicking or sending the
+     * enter key.
+     *
+     * @param element The element to click
+     */
+    public static void clickLinkWithoutWait(WebElement element) {
+        clickLinkWithoutWait(element, Keys.ENTER);
+    }
+
     private static void clickElement(WebElement element, CharSequence key) {
         WebDriver driver = getCurrentDriver();
 
@@ -94,6 +106,17 @@ public final class UIUtils {
                 : element::click);
     }
 
+    private static void clickLinkWithoutWait(WebElement element, CharSequence key) {
+        WebDriver driver = getCurrentDriver();
+
+        waitUntilElement(element).is().clickable();
+
+        if (BrowserDriverUtil.isDriverChrome(driver)) {
+            element.sendKeys(key);
+        } else {
+            element.click();
+        }
+    }
 
     /**
      * The method executes click in the element. This method always uses click and
@@ -120,7 +143,7 @@ public final class UIUtils {
         boolean current = checkbox.isSelected();
         if (current != enable) {
             clickElement(checkbox, Keys.SPACE);
-            Assert.assertNotEquals("Checkbox " + checkbox + " is still in the state " + current + " after click.", current, checkbox.isSelected());
+            Assertions.assertNotEquals(current, checkbox.isSelected(), "Checkbox " + checkbox + " is still in the state " + current + " after click.");
         }
     }
 
@@ -289,5 +312,21 @@ public final class UIUtils {
 
     public static String getRawPageSource() {
         return getRawPageSource(getCurrentDriver());
+    }
+
+    /**
+     * Navigates the driver back but it refreshes the page if it is not the expected one for
+     * chrome. Chrome 136 does not respect cache-control and refresh is needed
+     * to reach the server again (the page is cached no matter the cache-control
+     * directive returned).
+     * See https://issues.chromium.org/issues/415773538
+     *
+     * @param driver The driver used
+     * @param expectedPage The expected page
+     */
+    public static void navigateBackWithRefresh(WebDriver driver, AbstractPage expectedPage) {
+        driver.navigate().back();
+        driver.navigate().refresh();
+        expectedPage.assertCurrent();
     }
 }

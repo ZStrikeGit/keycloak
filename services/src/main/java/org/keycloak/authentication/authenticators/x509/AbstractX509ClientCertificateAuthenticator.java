@@ -23,28 +23,28 @@ import java.security.Principal;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.util.function.Function;
-
 import javax.security.auth.x500.X500Principal;
+
 import jakarta.ws.rs.core.Response;
 
-import org.apache.commons.codec.binary.Hex;
-
-import org.jboss.logging.Logger;
 import org.keycloak.authentication.AuthenticationFlowContext;
 import org.keycloak.authentication.Authenticator;
 import org.keycloak.common.crypto.CryptoIntegration;
 import org.keycloak.common.crypto.UserIdentityExtractor;
 import org.keycloak.common.crypto.UserIdentityExtractorProvider;
+import org.keycloak.crypto.HashException;
+import org.keycloak.crypto.JavaAlgorithm;
 import org.keycloak.events.Details;
 import org.keycloak.forms.login.LoginFormsProvider;
 import org.keycloak.jose.jws.crypto.HashUtils;
-import org.keycloak.crypto.HashException;
-import org.keycloak.crypto.JavaAlgorithm;
 import org.keycloak.models.Constants;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.services.x509.X509ClientCertificateLookup;
+
+import org.apache.commons.codec.binary.Hex;
+import org.jboss.logging.Logger;
 
 
 /**
@@ -66,6 +66,7 @@ public abstract class AbstractX509ClientCertificateAuthenticator implements Auth
     public static final String TIMESTAMP_VALIDATION = "x509-cert-auth.timestamp-validation-enabled";
     public static final String SERIALNUMBER_HEX = "x509-cert-auth.serialnumber-hex-enabled";
     public static final String CRL_RELATIVE_PATH = "x509-cert-auth.crl-relative-path";
+    public static final String CRL_ABORT_IF_NON_UPDATED = "x509-cert-auth-crl-abort-if-non-updated";
     public static final String OCSPRESPONDER_URI = "x509-cert-auth.ocsp-responder-uri";
     public static final String OCSPRESPONDER_CERTIFICATE = "x509-cert-auth.ocsp-responder-certificate";
     public static final String MAPPING_SOURCE_SELECTION = "x509-cert-auth.mapping-source-selection";
@@ -91,9 +92,18 @@ public abstract class AbstractX509ClientCertificateAuthenticator implements Auth
     public static final String CERTIFICATE_POLICY_MODE_ANY = "Any";
     static final String DEFAULT_MATCH_ALL_EXPRESSION = "(.*?)(?:$)";
     public static final String CONFIRMATION_PAGE_DISALLOWED = "x509-cert-auth.confirmation-page-disallowed";
+    // revalidate is deprecated and will be always true in 27.0
+    @Deprecated(forRemoval = true, since = "26.8")
     public static final String REVALIDATE_CERTIFICATE = "x509-cert-auth.revalidate-certificate-enabled";
+    public static final String CERTIFICATE_CA_SUBJECT_DN = "x509-cert-auth.casubjectdn";
 
-    private final static Logger logger = Logger.getLogger(AbstractX509ClientCertificateAuthenticator.class);;
+    private final static Logger logger = Logger.getLogger(AbstractX509ClientCertificateAuthenticator.class);
+
+    private boolean legacyCriticalBehavior;
+
+    public AbstractX509ClientCertificateAuthenticator(boolean legacyCriticalBehavior) {
+        this.legacyCriticalBehavior = legacyCriticalBehavior;
+    }
 
     protected Response createInfoResponse(AuthenticationFlowContext context, String infoMessage, Object ... parameters) {
         LoginFormsProvider form = context.form();
@@ -115,6 +125,7 @@ public abstract class AbstractX509ClientCertificateAuthenticator implements Auth
                         .mode(config.getCertificatePolicyMode().getMode())
                         .parse(config.getCertificatePolicy())
                     .revocation()
+                        .crlAbortIfNonUpdated(config.getCrlAbortIfNonUpdated())
                         .cRLEnabled(config.getCRLEnabled())
                         .cRLDPEnabled(config.getCRLDistributionPointEnabled())
                         .cRLrelativePath(config.getCRLRelativePath())
@@ -123,6 +134,7 @@ public abstract class AbstractX509ClientCertificateAuthenticator implements Auth
                         .oCSPResponseCertificate(config.getOCSPResponderCertificate())
                         .oCSPResponderURI(config.getOCSPResponder())
                     .trustValidation()
+                        .caSubjectDN(config.getCASubjectDN())
                         .enabled(config.getRevalidateCertificateEnabled())
                     .timestampValidation()
                         .enabled(config.isCertValidationEnabled());
@@ -161,8 +173,8 @@ public abstract class AbstractX509ClientCertificateAuthenticator implements Auth
             Function<X509Certificate[], String> func = null;
 
             UserIdentityExtractorProvider userIdExtractor = CryptoIntegration.getProvider().getIdentityExtractorProvider();
-            logger.debug("UID Source: " + userIdentitySource);
-            logger.debug("UID Extractor: " + userIdExtractor.getClass().getName());
+            logger.debugf("UID Source: %s", userIdentitySource);
+            logger.debugf("UID Extractor: %s", userIdExtractor.getClass().getName());
             switch(userIdentitySource) {
 
                 case SUBJECTDN:
@@ -311,5 +323,9 @@ public abstract class AbstractX509ClientCertificateAuthenticator implements Auth
 
     @Override
     public void setRequiredActions(KeycloakSession session, RealmModel realm, UserModel user) {
+    }
+
+    public boolean isLegacyCriticalBehavior() {
+        return legacyCriticalBehavior;
     }
 }

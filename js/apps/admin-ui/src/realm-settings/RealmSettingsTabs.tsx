@@ -1,7 +1,7 @@
 import { fetchWithError } from "@keycloak/keycloak-admin-client";
 import type RealmRepresentation from "@keycloak/keycloak-admin-client/lib/defs/realmRepresentation";
 import { UserProfileConfig } from "@keycloak/keycloak-admin-client/lib/defs/userProfileMetadata";
-import { useEnvironment } from "@keycloak/keycloak-ui-shared";
+import { useAlerts, useEnvironment } from "@keycloak/keycloak-ui-shared";
 import {
   AlertVariant,
   ButtonVariant,
@@ -13,14 +13,12 @@ import {
   Tooltip,
 } from "@patternfly/react-core";
 import { useEffect, useState } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, FormProvider, useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-
 import { useAdminClient } from "../admin-client";
-import { useAlerts } from "@keycloak/keycloak-ui-shared";
 import { useConfirmDialog } from "../components/confirm-dialog/ConfirmDialog";
-import type { KeyValueType } from "../components/key-value-form/key-value-convert";
+import type { RealmLoAMappingType } from "../components/realm-loa-mapping/RealmLoAMapping";
 import {
   RoutableTabs,
   useRoutableTab,
@@ -29,9 +27,13 @@ import { ViewHeader } from "../components/view-header/ViewHeader";
 import { useAccess } from "../context/access/Access";
 import { useRealm } from "../context/realm-context/RealmContext";
 import { toDashboard } from "../dashboard/routes/Dashboard";
-import type { Environment } from "../environment";
+import type { Environment } from "../environment-types";
 import helpUrls from "../help-urls";
-import { convertFormValuesToObject, convertToFormValues } from "../util";
+import {
+  convertFormValuesToObject,
+  convertToFormValues,
+  resolveDisplayName,
+} from "../util";
 import { getAuthorizationHeaders } from "../utils/getAuthorizationHeaders";
 import { joinPath } from "../utils/joinPath";
 import useIsFeatureEnabled, { Feature } from "../utils/useIsFeatureEnabled";
@@ -44,7 +46,7 @@ import { PartialImportDialog } from "./PartialImport";
 import { PoliciesTab } from "./PoliciesTab";
 import ProfilesTab from "./ProfilesTab";
 import { RealmSettingsSessionsTab } from "./SessionsTab";
-import { RealmSettingsThemesTab } from "./ThemesTab";
+import ThemesTab from "./themes/ThemesTab";
 import { RealmSettingsTokensTab } from "./TokensTab";
 import { UserRegistration } from "./UserRegistration";
 import { EventsTab } from "./event-config/EventsTab";
@@ -64,6 +66,7 @@ type RealmSettingsHeaderProps = {
   value: boolean;
   save: () => void;
   realmName: string;
+  displayName: string;
   refresh: () => void;
 };
 
@@ -72,6 +75,7 @@ const RealmSettingsHeader = ({
   onChange,
   value,
   realmName,
+  displayName,
   refresh,
 }: RealmSettingsHeaderProps) => {
   const { adminClient } = useAdminClient();
@@ -103,7 +107,7 @@ const RealmSettingsHeader = ({
       try {
         await adminClient.realms.del({ realm: realmName });
         addAlert(t("deletedSuccessRealmSetting"), AlertVariant.success);
-        navigate(toDashboard({ realm: environment.masterRealm }));
+        void navigate(toDashboard({ realm: environment.masterRealm }));
         refresh();
       } catch (error) {
         addError("deleteErrorRealmSetting", error);
@@ -124,7 +128,8 @@ const RealmSettingsHeader = ({
         onClose={() => setPartialExportOpen(false)}
       />
       <ViewHeader
-        titleKey={realmName}
+        titleKey={displayName}
+        noTranslate
         subKey="realmSettingsExplain"
         helpUrl={helpUrls.realmSettingsUrl}
         divider={false}
@@ -182,9 +187,10 @@ export const RealmSettingsTabs = () => {
   const [tableData, setTableData] = useState<
     Record<string, string>[] | undefined
   >(undefined);
-  const { control, setValue, getValues } = useForm({
+  const form = useForm({
     mode: "onChange",
   });
+  const { control, setValue, getValues } = form;
   const [key, setKey] = useState(0);
   const refreshHeader = () => {
     setKey(key + 1);
@@ -202,10 +208,10 @@ export const RealmSettingsTabs = () => {
           combinedLocales.map(async (locale) => {
             try {
               const response =
-                await adminClient.realms.getRealmLocalizationTexts({
+                (await adminClient.realms.getRealmLocalizationTexts({
                   realm: realmName,
                   selectedLocale: locale,
-                });
+                })) as Record<string, string> | undefined;
 
               if (response) {
                 setTableData([response]);
@@ -219,7 +225,7 @@ export const RealmSettingsTabs = () => {
         return [];
       }
     };
-    fetchLocalizationTexts();
+    void fetchLocalizationTexts();
   }, [setValue, realm]);
 
   const save = async (r: UIRealmRepresentation) => {
@@ -228,11 +234,20 @@ export const RealmSettingsTabs = () => {
       r.attributes?.["acr.loa.map"] &&
       typeof r.attributes["acr.loa.map"] !== "string"
     ) {
+      if (isFeatureEnabled(Feature.StepUpAuthenticationSaml)) {
+        r.attributes["acr.uri.map"] = JSON.stringify(
+          Object.fromEntries(
+            (r.attributes["acr.loa.map"] as RealmLoAMappingType[])
+              .filter(({ acr, uri }) => acr !== "" && uri && uri !== "")
+              .map(({ acr, uri }) => [acr, uri]),
+          ),
+        );
+      }
       r.attributes["acr.loa.map"] = JSON.stringify(
         Object.fromEntries(
-          (r.attributes["acr.loa.map"] as KeyValueType[])
-            .filter(({ key }) => key !== "")
-            .map(({ key, value }) => [key, value]),
+          (r.attributes["acr.loa.map"] as RealmLoAMappingType[])
+            .filter(({ acr }) => acr !== "")
+            .map(({ acr, loa }) => [acr, loa]),
         ),
       );
     }
@@ -265,9 +280,9 @@ export const RealmSettingsTabs = () => {
       addError("realmSaveError", error);
     }
 
-    const isRealmRenamed = realmName !== (r.realm || realm?.realm);
+    const isRealmRenamed = realmName !== (r.realm || realm.realm);
     if (isRealmRenamed) {
-      navigate(toRealmSettings({ realm: r.realm!, tab: "general" }));
+      void navigate(toRealmSettings({ realm: r.realm!, tab: "general" }));
     }
     refresh();
   };
@@ -306,7 +321,7 @@ export const RealmSettingsTabs = () => {
   const clientPoliciesPoliciesTab = useClientPoliciesTab("policies");
 
   return (
-    <>
+    <FormProvider {...form}>
       <Controller
         name="enabled"
         defaultValue={true}
@@ -316,6 +331,7 @@ export const RealmSettingsTabs = () => {
             value={field.value}
             onChange={field.onChange}
             realmName={realmName}
+            displayName={resolveDisplayName(t, realm.displayName, realmName)}
             refresh={refreshHeader}
             save={() => save(getValues())}
           />
@@ -357,7 +373,7 @@ export const RealmSettingsTabs = () => {
             data-testid="rs-themes-tab"
             {...themesTab}
           >
-            <RealmSettingsThemesTab realm={realm!} save={save} />
+            <ThemesTab realm={realm!} save={save} />
           </Tab>
           <Tab
             title={<TabTitleText>{t("keys")}</TabTitleText>}
@@ -466,6 +482,6 @@ export const RealmSettingsTabs = () => {
           )}
         </RoutableTabs>
       </PageSection>
-    </>
+    </FormProvider>
   );
 };

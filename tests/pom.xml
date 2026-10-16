@@ -34,6 +34,36 @@
 
     <modules>
         <module>base</module>
+        <module>utils</module>
+        <module>utils-shared</module>
+        <module>custom-providers</module>
+        <module>custom-scripts</module>
+        <module>clustering</module>
+        <module>webauthn</module>
+        <module>conformance</module>
     </modules>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <configuration>
+                        <argLine>${testframework.surefire.args}</argLine>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>test-migration-util</id>
+            <modules>
+                <module>migration-util</module>
+            </modules>
+        </profile>
+    </profiles>
 
 </project>

@@ -16,17 +16,18 @@
  */
 package org.keycloak.transaction;
 
-import org.jboss.logging.Logger;
-import org.keycloak.models.KeycloakSession;
-import org.keycloak.models.KeycloakSessionFactory;
-import org.keycloak.models.KeycloakTransaction;
-import org.keycloak.provider.ExceptionConverter;
+import java.util.Objects;
 
 import jakarta.transaction.RollbackException;
 import jakarta.transaction.Status;
 import jakarta.transaction.Transaction;
 import jakarta.transaction.TransactionManager;
-import java.util.Objects;
+
+import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.KeycloakTransaction;
+import org.keycloak.provider.ExceptionConverter;
+
+import org.jboss.logging.Logger;
 
 /**
  * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
@@ -52,11 +53,13 @@ public class JtaTransactionWrapper implements KeycloakTransaction {
             tm.begin();
             ut = tm.getTransaction();
 
-            String messageToLog = "new JtaTransactionWrapper. Was existing transaction suspended: " + (suspended != null);
-            if (suspended != null) {
-                messageToLog = messageToLog + " Suspended transaction: " + suspended + ". ";
+            if (logger.isDebugEnabled()) {
+                String messageToLog = "new JtaTransactionWrapper. Was existing transaction suspended: " + (suspended != null);
+                if (suspended != null) {
+                    messageToLog = messageToLog + " Suspended transaction: " + suspended + ". ";
+                }
+                logMessage(messageToLog);
             }
-            logMessage(messageToLog);
 
             //ended = new Exception();
         } catch (Exception e) {
@@ -65,12 +68,13 @@ public class JtaTransactionWrapper implements KeycloakTransaction {
     }
 
     public void handleException(Throwable e) {
+        logger.debug(getDetailedMessage("Exception during transaction operation."), e);
+
         if (e instanceof RollbackException) {
             e = e.getCause() != null ? e.getCause() : e;
         }
         final Throwable finalE = e;
 
-        logger.error(getDetailedMessage("Exception during transaction operation."));
         session.getKeycloakSessionFactory().getProviderFactoriesStream(ExceptionConverter.class)
                 .map(factory -> ((ExceptionConverter) factory).convert(finalE))
                 .filter(Objects::nonNull)
@@ -162,7 +166,7 @@ public class JtaTransactionWrapper implements KeycloakTransaction {
         logMessage("JtaTransactionWrapper end.");
         if (suspended != null) {
             try {
-                logger.debug("JtaTransactionWrapper resuming suspended user transaction: " + suspended);
+                logger.debugf("JtaTransactionWrapper resuming suspended user transaction: %s", suspended);
                 tm.resume(suspended);
             } catch (Exception e) {
                 throw new RuntimeException(e);

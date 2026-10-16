@@ -34,7 +34,7 @@ export default function MappingDetails() {
   const { t } = useTranslation();
   const { addAlert, addError } = useAlerts();
 
-  const { id, mapperId } = useParams<MapperParams>();
+  const { id, mapperId, viewMode } = useParams<MapperParams>();
   const form = useForm();
   const { setValue, handleSubmit } = form;
   const [mapping, setMapping] = useState<ProtocolMapperTypeRepresentation>();
@@ -46,8 +46,7 @@ export default function MappingDetails() {
   const navigate = useNavigate();
   const { realm } = useRealm();
   const serverInfo = useServerInfo();
-  const isGuid = /^[{]?[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}[}]?$/;
-  const isUpdating = !!isGuid.exec(mapperId);
+  const isUpdating = viewMode === "edit";
 
   const isOnClientScope = !!useMatch(MapperRoute.path);
   const toDetails = () =>
@@ -60,15 +59,17 @@ export default function MappingDetails() {
       let data: ProtocolMapperRepresentation | undefined;
       if (isUpdating) {
         if (isOnClientScope) {
-          data = await adminClient.clientScopes.findProtocolMapper({
-            id,
-            mapperId,
-          });
+          data =
+            (await adminClient.clientScopes.findProtocolMapper({
+              id,
+              mapperId,
+            })) ?? undefined;
         } else {
-          data = await adminClient.clients.findProtocolMapperById({
-            id,
-            mapperId,
-          });
+          data =
+            (await adminClient.clients.findProtocolMapperById({
+              id,
+              mapperId,
+            })) ?? undefined;
         }
         if (!data) {
           throw new Error(t("notFound"));
@@ -140,7 +141,7 @@ export default function MappingDetails() {
           });
         }
         addAlert(t("mappingDeletedSuccess"), AlertVariant.success);
-        navigate(toDetails());
+        void navigate(toDetails());
       } catch (error) {
         addError("mappingDeletedError", error);
       }
@@ -171,6 +172,9 @@ export default function MappingDetails() {
         }
       }
       addAlert(t(`mapping${key}Success`), AlertVariant.success);
+      if (!isUpdating) {
+        void navigate(toDetails());
+      }
     } catch (error) {
       addError(`mapping${key}Error`, error);
     }
@@ -225,10 +229,11 @@ export default function MappingDetails() {
               stringify
             />
             <ActionGroup>
-              <Button variant="primary" type="submit">
+              <Button variant="primary" type="submit" data-testid="save">
                 {t("save")}
               </Button>
               <Button
+                data-testid="cancel"
                 variant="link"
                 component={(props) => <Link {...props} to={toDetails()} />}
               >

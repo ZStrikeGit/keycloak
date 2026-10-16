@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import type {
   UserProfileAttribute,
   UserProfileConfig,
@@ -18,29 +17,26 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAdminClient } from "../admin-client";
 import { FixedButtonsGroup } from "../components/form/FixedButtonGroup";
 import { ViewHeader } from "../components/view-header/ViewHeader";
-import { useRealm } from "../context/realm-context/RealmContext";
-import { i18n } from "../i18n/i18n";
 import { convertToFormValues } from "../util";
-import useLocale from "../utils/useLocale";
 import { useParams } from "../utils/useParams";
-import "./realm-settings-section.css";
+import { TranslationForm } from "./AddTranslationModal";
 import type { AttributeParams } from "./routes/Attribute";
 import { toUserProfile } from "./routes/UserProfile";
 import { UserProfileProvider } from "./user-profile/UserProfileContext";
+import {
+  saveTranslations,
+  Translations,
+} from "./user-profile/attribute/TranslatableField";
 import { AttributeAnnotations } from "./user-profile/attribute/AttributeAnnotations";
 import { AttributeGeneralSettings } from "./user-profile/attribute/AttributeGeneralSettings";
 import { AttributePermission } from "./user-profile/attribute/AttributePermission";
+import {
+  AttributeScimSettings,
+  SCIM_ANNOTATION_KEY,
+} from "./user-profile/attribute/AttributeScimSettings";
 import { AttributeValidations } from "./user-profile/attribute/AttributeValidations";
 
-type TranslationForm = {
-  locale: string;
-  value: string;
-};
-
-type Translations = {
-  key: string;
-  translations: TranslationForm[];
-};
+import "./realm-settings-section.css";
 
 type IndexedAnnotations = {
   key: string;
@@ -56,6 +52,7 @@ type UserProfileAttributeFormFields = Omit<
   UserProfileAttribute,
   "validations" | "annotations"
 > &
+  Translations &
   Attribute &
   Permission & {
     validations: IndexedValidations[];
@@ -93,44 +90,25 @@ type PermissionEdit = [
 export const USERNAME_EMAIL = ["username", "email"];
 
 const CreateAttributeFormContent = ({
-  onHandlingTranslationsData,
-  onHandlingGeneratedDisplayName,
   save,
 }: {
   save: (profileConfig: UserProfileConfig) => void;
-  onHandlingTranslationsData: (translationsData: Translations) => void;
-  onHandlingGeneratedDisplayName: (generatedDisplayName: string) => void;
 }) => {
   const { t } = useTranslation();
   const form = useFormContext();
   const { realm, attributeName } = useParams<AttributeParams>();
   const editMode = attributeName ? true : false;
 
-  const handleTranslationsData = (translationsData: Translations) => {
-    onHandlingTranslationsData(translationsData);
-  };
-
-  const handleGeneratedDisplayName = (generatedDisplayName: string) => {
-    onHandlingGeneratedDisplayName(generatedDisplayName);
-  };
-
   return (
     <UserProfileProvider>
       <ScrollForm
         label={t("jumpToSection")}
         sections={[
-          {
-            title: t("generalSettings"),
-            panel: (
-              <AttributeGeneralSettings
-                onHandlingTranslationData={handleTranslationsData}
-                onHandlingGeneratedDisplayName={handleGeneratedDisplayName}
-              />
-            ),
-          },
+          { title: t("generalSettings"), panel: <AttributeGeneralSettings /> },
           { title: t("permission"), panel: <AttributePermission /> },
           { title: t("validations"), panel: <AttributeValidations /> },
           { title: t("annotations"), panel: <AttributeAnnotations /> },
+          { title: t("scimSettings"), panel: <AttributeScimSettings /> },
         ]}
       />
       <Form onSubmit={form.handleSubmit(save)}>
@@ -158,79 +136,12 @@ const CreateAttributeFormContent = ({
 export default function NewAttributeSettings() {
   const { adminClient } = useAdminClient();
   const { realm: realmName, attributeName } = useParams<AttributeParams>();
-  const { realmRepresentation: realm } = useRealm();
   const form = useForm<UserProfileAttributeFormFields>();
-  const { t } = useTranslation();
-  const combinedLocales = useLocale();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { addAlert, addError } = useAlerts();
   const [config, setConfig] = useState<UserProfileConfig | null>(null);
   const editMode = attributeName ? true : false;
-  const [translationsData, setTranslationsData] = useState<Translations>({
-    key: "",
-    translations: [],
-  });
-  const [generatedDisplayName, setGeneratedDisplayName] = useState<string>("");
-
-  useFetch(
-    async () => {
-      const translationsToSave: Translations[] = [];
-
-      await Promise.all(
-        combinedLocales.map(async (selectedLocale) => {
-          try {
-            const translations =
-              await adminClient.realms.getRealmLocalizationTexts({
-                realm: realmName,
-                selectedLocale,
-              });
-
-            const formData = form.getValues();
-            const formattedKey =
-              formData.displayName?.substring(
-                2,
-                formData.displayName.length - 1,
-              ) || "";
-
-            const filteredTranslations: TranslationForm[] = Object.entries(
-              translations,
-            )
-              .filter(([key]) => key === formattedKey)
-              .map(([_, value]) => ({
-                locale: selectedLocale,
-                value,
-              }));
-
-            if (filteredTranslations.length > 0) {
-              translationsToSave.push({
-                key: formattedKey,
-                translations: filteredTranslations,
-              });
-            }
-          } catch (error) {
-            addError("errorSavingTranslations", error);
-          }
-        }),
-      );
-
-      return translationsToSave;
-    },
-    (translationsToSave) => {
-      if (translationsToSave && translationsToSave.length > 0) {
-        const allTranslations = translationsToSave.flatMap(
-          (translation) => translation.translations,
-        );
-
-        setTranslationsData({
-          key: translationsToSave[0].key,
-          translations: allTranslations,
-        });
-
-        form.setValue("translations", allTranslations);
-      }
-    },
-    [combinedLocales, realmName, form],
-  );
 
   useFetch(
     () => adminClient.users.getProfile(),
@@ -243,6 +154,7 @@ export default function NewAttributeSettings() {
         selector,
         required,
         multivalued,
+        defaultValue,
         ...values
       } = config.attributes!.find(
         (attribute) => attribute.name === attributeName,
@@ -274,34 +186,10 @@ export default function NewAttributeSettings() {
       );
       form.setValue("isRequired", required !== undefined);
       form.setValue("multivalued", multivalued === true);
+      form.setValue("defaultValue", defaultValue);
     },
     [],
   );
-
-  const saveTranslations = async () => {
-    try {
-      const nonEmptyTranslations = translationsData.translations
-        .filter((translation) => translation.value.trim() !== "")
-        .map(async (translation) => {
-          try {
-            await adminClient.realms.addLocalization(
-              {
-                realm: realmName,
-                selectedLocale: translation.locale,
-                key: translationsData.key,
-              },
-              translation.value,
-            );
-          } catch (error) {
-            addError(t("errorSavingTranslations"), error);
-          }
-        });
-
-      await Promise.all(nonEmptyTranslations);
-    } catch (error) {
-      console.error(`Error saving translations: ${error}`);
-    }
-  };
 
   const save = async ({
     hasSelector,
@@ -325,10 +213,12 @@ export default function NewAttributeSettings() {
       {} as Record<string, unknown>,
     );
 
-    const annotations = formFields.annotations.reduce(
-      (obj, item) => Object.assign(obj, { [item.key]: item.value }),
-      {},
-    );
+    const annotations = formFields.annotations
+      .filter((item) => !(item.key === SCIM_ANNOTATION_KEY && !item.value))
+      .reduce(
+        (obj, item) => Object.assign(obj, { [item.key]: item.value }),
+        {},
+      );
 
     const patchAttributes = () =>
       (config?.attributes || []).map((attribute) => {
@@ -348,6 +238,9 @@ export default function NewAttributeSettings() {
             annotations,
             validations,
           },
+          formFields.defaultValue
+            ? { defaultValue: formFields.defaultValue }
+            : { defaultValue: null },
           formFields.isRequired ? { required: formFields.required } : undefined,
           formFields.group ? { group: formFields.group } : { group: null },
         );
@@ -358,7 +251,7 @@ export default function NewAttributeSettings() {
         Object.assign(
           {
             name: formFields.name,
-            displayName: formFields.displayName! || generatedDisplayName,
+            displayName: formFields.displayName!,
             required: formFields.isRequired ? formFields.required : undefined,
             selector: formFields.selector,
             permissions: formFields.permissions!,
@@ -366,21 +259,13 @@ export default function NewAttributeSettings() {
             annotations,
             validations,
           },
+          formFields.defaultValue
+            ? { defaultValue: formFields.defaultValue }
+            : { defaultValue: null },
           formFields.isRequired ? { required: formFields.required } : undefined,
           formFields.group ? { group: formFields.group } : undefined,
         ),
       ] as UserProfileAttribute);
-
-    if (realm?.internationalizationEnabled) {
-      const hasNonEmptyTranslations = translationsData.translations.some(
-        (translation) => translation.value.trim() !== "",
-      );
-
-      if (!hasNonEmptyTranslations) {
-        addError("createAttributeError", t("translationError"));
-        return;
-      }
-    }
 
     try {
       const updatedAttributes = editMode ? patchAttributes() : addAttribute();
@@ -391,9 +276,22 @@ export default function NewAttributeSettings() {
         realm: realmName,
       });
 
-      await saveTranslations();
-      i18n.reloadResources();
-      navigate(toUserProfile({ realm: realmName, tab: "attributes" }));
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- translation is undefined when user hasn't interacted with translation dialogs
+      if (formFields.translation) {
+        try {
+          await saveTranslations({
+            adminClient,
+            realmName,
+            translationsData: {
+              translation: formFields.translation,
+            },
+          });
+          await i18n.reloadResources();
+        } catch (error) {
+          addError(t("errorSavingTranslations"), error);
+        }
+      }
+      void navigate(toUserProfile({ realm: realmName, tab: "attributes" }));
 
       addAlert(t("createAttributeSuccess"), AlertVariant.success);
     } catch (error) {
@@ -408,11 +306,7 @@ export default function NewAttributeSettings() {
         subKey={editMode ? "" : t("createAttributeSubTitle")}
       />
       <PageSection variant="light">
-        <CreateAttributeFormContent
-          save={() => form.handleSubmit(save)()}
-          onHandlingTranslationsData={setTranslationsData}
-          onHandlingGeneratedDisplayName={setGeneratedDisplayName}
-        />
+        <CreateAttributeFormContent save={() => form.handleSubmit(save)()} />
       </PageSection>
     </FormProvider>
   );

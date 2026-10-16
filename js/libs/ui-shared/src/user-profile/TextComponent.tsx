@@ -23,14 +23,15 @@ export const TextComponent = (props: UserProfileFieldProps) => {
             : label(
                 props.t,
                 attribute.annotations?.["inputTypePlaceholder"] as string,
-                attribute.name,
+                "",
                 attribute.annotations?.[
                   "inputOptionLabelsI18nPrefix"
                 ] as string,
               )
         }
-        readOnly={attribute.readOnly}
+        isDisabled={attribute.readOnly}
         isRequired={isRequired}
+        defaultValue={attribute.defaultValue}
         {...form.register(fieldName(attribute.name))}
       />
     </UserProfileGroup>

@@ -1,6 +1,5 @@
 import { fetchWithError } from "@keycloak/keycloak-admin-client";
 import type ClientRepresentation from "@keycloak/keycloak-admin-client/lib/defs/clientRepresentation";
-import { Language } from "@patternfly/react-code-editor";
 import {
   ActionGroup,
   AlertVariant,
@@ -92,7 +91,9 @@ export default function ImportForm() {
         }),
       });
       addAlert(t("clientImportSuccess"), AlertVariant.success);
-      navigate(toClient({ realm, clientId: newClient.id, tab: "settings" }));
+      void navigate(
+        toClient({ realm, clientId: newClient.id, tab: "settings" }),
+      );
     } catch (error) {
       addError("clientImportError", error);
     }
@@ -110,7 +111,7 @@ export default function ImportForm() {
           <FormProvider {...form}>
             <FileUploadForm
               id="realm-file"
-              language={Language.json}
+              language="json"
               extension=".json,.xml"
               helpText={t("helpFileUploadClient")}
               onChange={handleFileChange}

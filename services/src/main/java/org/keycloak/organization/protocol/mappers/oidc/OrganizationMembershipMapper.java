@@ -17,9 +17,6 @@
 
 package org.keycloak.organization.protocol.mappers.oidc;
 
-import static org.keycloak.protocol.oidc.mappers.OIDCAttributeMapperHelper.JSON_TYPE;
-import static org.keycloak.protocol.oidc.mappers.OIDCAttributeMapperHelper.TOKEN_CLAIM_NAME;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -33,13 +30,15 @@ import org.keycloak.common.Profile;
 import org.keycloak.models.ClientSessionContext;
 import org.keycloak.models.KeycloakContext;
 import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.OrganizationDomainModel;
 import org.keycloak.models.OrganizationModel;
 import org.keycloak.models.ProtocolMapperModel;
 import org.keycloak.models.RealmModel;
+import org.keycloak.models.UserModel;
 import org.keycloak.models.UserSessionModel;
 import org.keycloak.models.utils.ModelToRepresentation;
 import org.keycloak.models.utils.RepresentationToModel;
-import org.keycloak.organization.OrganizationProvider;
+import org.keycloak.organization.utils.Organizations;
 import org.keycloak.protocol.ProtocolMapperUtils;
 import org.keycloak.protocol.oidc.OIDCLoginProtocol;
 import org.keycloak.protocol.oidc.mappers.AbstractOIDCProtocolMapper;
@@ -52,11 +51,15 @@ import org.keycloak.provider.EnvironmentDependentProviderFactory;
 import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.representations.IDToken;
 
+import static org.keycloak.protocol.oidc.mappers.OIDCAttributeMapperHelper.JSON_TYPE;
+import static org.keycloak.protocol.oidc.mappers.OIDCAttributeMapperHelper.TOKEN_CLAIM_NAME;
+
 public class OrganizationMembershipMapper extends AbstractOIDCProtocolMapper implements OIDCAccessTokenMapper, OIDCIDTokenMapper, UserInfoTokenMapper, TokenIntrospectionTokenMapper, EnvironmentDependentProviderFactory {
 
     public static final String PROVIDER_ID = "oidc-organization-membership-mapper";
     public static final String ADD_ORGANIZATION_ATTRIBUTES = "addOrganizationAttributes";
     public static final String ADD_ORGANIZATION_ID = "addOrganizationId";
+    public static final String ADD_ORGANIZATION_DOMAIN = "addOrganizationDomain";
 
     @Override
     public List<ProviderConfigProperty> getConfigProperties() {
@@ -85,6 +88,13 @@ public class OrganizationMembershipMapper extends AbstractOIDCProtocolMapper imp
         property.setDefaultValue(Boolean.FALSE.toString());
         property.setHelpText(ADD_ORGANIZATION_ID + ".help");
         properties.add(property);
+        property = new ProviderConfigProperty();
+        property.setName(ADD_ORGANIZATION_DOMAIN);
+        property.setLabel(ADD_ORGANIZATION_DOMAIN + ".label");
+        property.setType(ProviderConfigProperty.BOOLEAN_TYPE);
+        property.setDefaultValue(Boolean.FALSE.toString());
+        property.setHelpText(ADD_ORGANIZATION_DOMAIN + ".help");
+        properties.add(property);
         return properties;
     }
 
@@ -110,27 +120,25 @@ public class OrganizationMembershipMapper extends AbstractOIDCProtocolMapper imp
 
     @Override
     protected void setClaim(IDToken token, ProtocolMapperModel model, UserSessionModel userSession, KeycloakSession session, ClientSessionContext clientSessionCtx) {
-        String rawScopes = clientSessionCtx.getScopeString();
-        OrganizationScope scope = OrganizationScope.valueOfScope(rawScopes);
-
-        if (scope == null) {
-            return;
-        }
-
-        String orgId = clientSessionCtx.getClientSession().getNote(OrganizationModel.ORGANIZATION_ATTRIBUTE);
-        Stream<OrganizationModel> organizations;
-
-        if (orgId == null) {
-            organizations = scope.resolveOrganizations(userSession.getUser(), rawScopes, session);
-        } else {
-            organizations = Stream.of(session.getProvider(OrganizationProvider.class).getById(orgId));
-        }
-
         KeycloakContext context = session.getContext();
+        OrganizationModel organization = context.getOrganization();
+        List<OrganizationModel> organizations;
+
+        if (organization != null) {
+            organizations = List.of(organization);
+        } else {
+            organizations = resolveFromRequestedScopes(session, userSession, clientSessionCtx).toList();
+        }
+
         RealmModel realm = context.getRealm();
         ProtocolMapperModel effectiveModel = getEffectiveModel(session, realm, model);
+        UserModel user = userSession.getUser();
 
-        Object claim = resolveValue(effectiveModel, organizations.toList());
+        if (organizations.size() == 1) {
+            context.setOrganization(organizations.get(0));
+        }
+
+        Object claim = resolveValue(effectiveModel, user, organizations);
 
         if (claim == null) {
             return;
@@ -139,29 +147,52 @@ public class OrganizationMembershipMapper extends AbstractOIDCProtocolMapper imp
         OIDCAttributeMapperHelper.mapClaim(token, effectiveModel, claim);
     }
 
-    private Object resolveValue(ProtocolMapperModel model, List<OrganizationModel> organizations) {
+    private Stream<OrganizationModel> resolveFromRequestedScopes(KeycloakSession session, UserSessionModel userSession, ClientSessionContext context) {
+        String rawScopes = context.getScopeString(true);
+        OrganizationScope scope = OrganizationScope.valueOfScope(session, rawScopes);
+
+        if (scope == null) {
+            return Stream.empty();
+        }
+
+        return scope.resolveOrganizations(userSession.getUser(), rawScopes, session);
+    }
+
+    private Object resolveValue(ProtocolMapperModel model, UserModel user, List<OrganizationModel> organizations) {
         if (organizations.isEmpty()) {
             return null;
         }
 
         if (!OIDCAttributeMapperHelper.isMultivalued(model)) {
-            return organizations.get(0).getAlias();
+            OrganizationModel org = organizations.get(0);
+            if (!isEligibleForClaim(org, user)) {
+                return null;
+            }
+            return org.getAlias();
         }
 
         Map<String, Map<String, Object>> value = new HashMap<>();
 
         for (OrganizationModel o : organizations) {
-            if (o == null || !o.isEnabled()) {
+            if (!isEligibleForClaim(o, user)) {
                 continue;
             }
 
             Map<String, Object> claims = new HashMap<>();
 
+            // Add organization attributes first
+            if (isAddOrganizationAttributes(model)) {
+                claims.putAll(o.getAttributes());
+            }
+            // Add organization ID last so it overrides any custom "id" attribute
             if (isAddOrganizationId(model)) {
                 claims.put(OAuth2Constants.ORGANIZATION_ID, o.getId());
             }
-            if (isAddOrganizationAttributes(model)) {
-                claims.putAll(o.getAttributes());
+
+            if (isAddOrganizationDomain(model)) {
+                OrganizationDomainModel domain = Organizations.getMatchingDomain(Organizations.getEmailDomain(user.getEmail()), o);
+
+                claims.put("domain", domain == null ? null : domain.getName());
             }
 
             value.put(o.getAlias(), claims);
@@ -176,6 +207,10 @@ public class OrganizationMembershipMapper extends AbstractOIDCProtocolMapper imp
         }
 
         return value.keySet();
+    }
+
+    private static boolean isEligibleForClaim(OrganizationModel org, UserModel user) {
+        return org != null && org.isEnabled() && user != null && org.isMember(user);
     }
 
     private static boolean isJsonType(ProtocolMapperModel model) {
@@ -222,6 +257,10 @@ public class OrganizationMembershipMapper extends AbstractOIDCProtocolMapper imp
 
     private boolean isAddOrganizationId(ProtocolMapperModel model) {
         return Boolean.parseBoolean(model.getConfig().getOrDefault(ADD_ORGANIZATION_ID, Boolean.FALSE.toString()));
+    }
+
+    private boolean isAddOrganizationDomain(ProtocolMapperModel model) {
+        return Boolean.parseBoolean(model.getConfig().getOrDefault(ADD_ORGANIZATION_DOMAIN, Boolean.FALSE.toString()));
     }
 
     public static ProtocolMapperModel create(String name, boolean accessToken, boolean idToken, boolean introspectionEndpoint) {
